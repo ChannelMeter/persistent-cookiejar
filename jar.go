@@ -12,6 +12,7 @@ package cookiejar
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -92,11 +93,15 @@ var noOptions Options
 // New will return an error if the cookies could not be loaded
 // from the file for any reason than if the file does not exist.
 func New(o *Options) (*Jar, error) {
-	return newAtTime(o, time.Now())
+	return newAtTime(o, time.Now(), nil)
+}
+
+func NewFromReader(o *Options, r io.Reader) (*Jar, error) {
+	return newAtTime(o, time.Now(), r)
 }
 
 // newAtTime is like New but takes the current time as a parameter.
-func newAtTime(o *Options, now time.Time) (*Jar, error) {
+func newAtTime(o *Options, now time.Time, r io.Reader) (*Jar, error) {
 	jar := &Jar{
 		entries: make(map[string]map[string]entry),
 	}
@@ -107,9 +112,9 @@ func newAtTime(o *Options, now time.Time) (*Jar, error) {
 		jar.psList = publicsuffix.List
 	}
 	if jar.filename = o.Filename; jar.filename == "" {
-		jar.filename = DefaultCookieFile()
+		jar.filename = "" //DefaultCookieFile()
 	}
-	if err := jar.load(); err != nil {
+	if err := jar.load(r); err != nil {
 		return nil, errgo.Notef(err, "cannot load cookies")
 	}
 	jar.deleteExpired(now)

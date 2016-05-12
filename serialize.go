@@ -19,58 +19,72 @@ import (
 // Save saves the cookies to the persistent cookie file.
 // Before the file is written, it reads any cookies that
 // have been stored from it and merges them into j.
-func (j *Jar) Save() error {
-	return j.save(time.Now())
+func (j *Jar) Save(w io.Writer) error {
+	return j.save(time.Now(), w)
 }
 
 // save is like Save but takes the current time as a parameter.
-func (j *Jar) save(now time.Time) error {
-	locked, err := lockFile(lockFileName(j.filename))
-	if err != nil {
-		return errgo.Mask(err)
+func (j *Jar) save(now time.Time, w io.Writer) error {
+	if j.filename != "" {
+		locked, err := lockFile(lockFileName(j.filename))
+		if err != nil {
+			return errgo.Mask(err)
+		}
+		defer locked.Close()
+		f, err := os.OpenFile(j.filename, os.O_RDWR|os.O_CREATE, 0600)
+		if err != nil {
+			return errgo.Mask(err)
+		}
+		defer f.Close()
+		w = f
 	}
-	defer locked.Close()
-	f, err := os.OpenFile(j.filename, os.O_RDWR|os.O_CREATE, 0600)
-	if err != nil {
-		return errgo.Mask(err)
-	}
-	defer f.Close()
 	// TODO optimization: if the file hasn't changed since we
 	// loaded it, don't bother with the merge step.
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if err := j.mergeFrom(f); err != nil {
-		// The cookie file is probably corrupt.
-		log.Printf("cannot read cookie file to merge it; ignoring it: %v", err)
+	if f, ok := w.(io.Reader); ok {
+		if err := j.mergeFrom(f); err != nil {
+			// The cookie file is probably corrupt.
+			log.Printf("cannot read cookie file to merge it; ignoring it: %v", err)
+		}
 	}
 	j.deleteExpired(now)
-	if err := f.Truncate(0); err != nil {
-		return errgo.Notef(err, "cannot truncate file")
+	if f, ok := w.(*os.File); ok {
+		if err := f.Truncate(0); err != nil {
+			return errgo.Notef(err, "cannot truncate file")
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			return errgo.Mask(err)
+		}
 	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return errgo.Mask(err)
-	}
-	return j.writeTo(f)
+	return j.writeTo(w)
 }
 
 // load loads the cookies from j.filename. If the file does not exist,
 // no error will be returned and no cookies will be loaded.
-func (j *Jar) load() error {
-	locked, err := lockFile(lockFileName(j.filename))
-	if err != nil {
-		return errgo.Mask(err)
-	}
-	defer locked.Close()
-	f, err := os.Open(j.filename)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+func (j *Jar) load(r io.Reader) error {
+	if j.filename != "" {
+		locked, err := lockFile(lockFileName(j.filename))
+		if err != nil {
+			return errgo.Mask(err)
 		}
-		return err
+		defer locked.Close()
+
+		f, err := os.Open(j.filename)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		defer f.Close()
+		r = f
 	}
-	defer f.Close()
-	if err := j.mergeFrom(f); err != nil {
+	if r == nil {
+		return nil
+	}
+	if err := j.mergeFrom(r); err != nil {
 		return errgo.Mask(err)
 	}
 	return nil
